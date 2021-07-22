@@ -19,7 +19,7 @@ local on_attach = function(client, bufnr)
     -- CursorMoved event could be slow, since it's hooked everytime the cursor moves.
     -- vim.cmd('autocmd CursorMoved * lua vim.lsp.util.show_line_diagnostics()')
     -- CursorHold event may be more efficient,
-    vim.cmd('autocmd CursorHold * lua vim.lsp.diagnostic.show_line_diagnostics()')
+    -- vim.cmd('autocmd CursorHold * lua vim.lsp.diagnostic.show_line_diagnostics()') -- Switch this off since cursor gets trapped in the diagnostic window
     -- although I will have to wait for 4 seconds until the window pops up.
     -- vim.cmd('autocmd CursorHold * lua vim.lsp.util.show_line_diagnostics()')
     -- The time can be configured by changing updatetime.
@@ -58,14 +58,14 @@ local on_attach = function(client, bufnr)
     -- https://coffeeandcontemplation.dev/
     -- https://zenn.dev/garypippi/articles/fe72e26c25563e4c44a9
     vim.api.nvim_exec([[
-        sign define LspDiagnosticsSignError text=✘
-        sign define LspDiagnosticsSignWarning text=●
-        sign define LspDiagnosticsSignInformation text=●
-        sign define LspDiagnosticsSignHint text=●
-        hi LspDiagnosticsSignError ctermfg=red
-        hi LspDiagnosticsSignWarning ctermfg=yellow
-        hi LspDiagnosticsSignInformation ctermfg=blue
-        hi LspDiagnosticsSignHint ctermfg=green
+    sign define LspDiagnosticsSignError text=✘
+    sign define LspDiagnosticsSignWarning text=●
+    sign define LspDiagnosticsSignInformation text=●
+    sign define LspDiagnosticsSignHint text=●
+    hi LspDiagnosticsSignError ctermfg=red
+    hi LspDiagnosticsSignWarning ctermfg=yellow
+    hi LspDiagnosticsSignInformation ctermfg=blue
+    hi LspDiagnosticsSignHint ctermfg=green
     ]], false)
 
     -- Disable auto signature option in to avoid getting error at
@@ -77,7 +77,7 @@ local on_attach = function(client, bufnr)
     -- api.nvim_set_current_win(win) (fail here)
     -- https://github.com/nvim-lua/completion-nvim/blob/dc4cf56e78aa5e7e782064411b22460597d72c36/lua/completion/signature_help.lua
     -- https://github.com/neovim/neovim/blob/370469be250de546df1a674d6d5cd41283bb6b3c/runtime/lua/vim/lsp/util.lua
-    vim.g.completion_enable_auto_signature = 0
+    -- vim.g.completion_enable_auto_signature = 0  -- this works now
 end
 
 
@@ -98,42 +98,50 @@ function getcwd(fname)
 end
 
 
-function load_pyls_ms(nvim_lsp, python_path, site_packages_path, python_ver)
-    -- Reference: https://github.com/neovim/nvim-lspconfig/blob/master/CONFIG.md#pyls_ms
-    -- Becareful that the config snippet found above, doesn't exactly follow the lua grammer.
-    -- "Default values" show the default values, when the attribute is not manually set.
-    -- You also need to add commas between the attributes.
-    nvim_lsp["pyls_ms"].setup{
-        cmd = { "dotnet", "exec", "/opt/python-language-server/output/bin/Debug/Microsoft.Python.LanguageServer.dll" },
-        on_attach = on_attach,
-        filetypes = { "python" },
-        init_options = {
-            analysisUpdates = true,
-            asyncStartup = true,
-            displayOptions = {},
-            interpreter = {
-                properties = {
-                    InterpreterPath = python_path,
-                    Version = python_ver
-                }
-            },
-            searchPaths = {
-                site_packages_path,
-            }
-        },
-        -- I have no idea, but suddenly root_dir is now required to run mpls
-        -- took me a long time to work it out.
-        root_dir = getcwd,
-        settings = {
-            python = {
-                analysis = {
-                    disabled = {},
-                    errors = {},
-                    info = {}
-                }
-            }
+-- https://neovim.io/doc/user/lsp.html
+function load_pylsp(nvim_lsp)
+    function root_dir(fname)
+        local root_files = {
+            'pyproject.toml',
+            'setup.py',
+            'setup.cfg',
+            'requirements.txt',
+            'Pipfile',
         }
-    }
+        return nvim_lsp.util.root_pattern(unpack(root_files))(fname) or nvim_lsp.util.find_git_ancestor(fname) or nvim_lsp.util.path.dirname(fname)
+    end
+
+    local venv_path = os.getenv("VIRTUAL_ENV")  -- could be nil
+    local home = os.getenv("HOME")
+    local pylsp_venv = home .. "/venvs/pylsp"
+    local python_path = pylsp_venv .. "/bin/python"
+    local pylsp_path = pylsp_venv .. "/bin/pylsp"
+
+    if venv_path ~= nil then
+        nvim_lsp["pylsp"].setup{
+            cmd = { python_path, pylsp_path },
+            on_attach = on_attach,
+            filetypes = { "python "},
+            root_dir = root_dir,
+            settings = {
+                -- pylsp.plugins.jedi.environment
+                pylsp = {
+                    plugins = {
+                        jedi = {
+                            environment = venv_path
+                        },
+                    },
+                },
+            },
+        }
+    else
+        nvim_lsp["pylsp"].setup{
+            cmd = { python_path, pylsp_path },
+            on_attach = on_attach,
+            filetype = { "python "},
+            root_dir = root_dir,
+        }
+    end
 end
 
 function load_ccls(nvim_lsp)
@@ -151,17 +159,5 @@ function load_ccls(nvim_lsp)
 
 end
 
-local venv = os.getenv("VIRTUAL_ENV")
-if venv ~= nil then -- not equal is '~=', and not '!=' in lua
-    local python_path = venv .. "/bin/python"
-    local site_packages_path = venv .. "/lib/" .. system("ls " .. venv .. "/lib | head -n 1 | tr -d '\n'") .. "/site-packages"
-    local python_ver = system(python_path .. " --version | cut -d ' ' -f 2 | tr -d '\n'")
-    load_pyls_ms(nvim_lsp, python_path, site_packages_path, python_ver)
-else
-    local python_path = "/usr/bin/python3"
-    local site_packages_path = "/usr/lib/python3/dist-packages"
-    local python_ver = system(python_path .. " --version | cut -d ' ' -f 2 | tr -d '\n'")
-    load_pyls_ms(nvim_lsp, python_path, site_packages_path, python_ver)
-end
-
+load_pylsp(nvim_lsp)
 load_ccls(nvim_lsp)
