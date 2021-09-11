@@ -1,0 +1,1 @@
+ACTION=="add", SUBSYSTEM=="hid", ENV{HID_NAME}=="HHKB-Hybrid_1" RUN+="/usr/local/bin/hhkb.sh %p"
